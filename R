@@ -1,0 +1,244 @@
+library(haven)
+library(tidyverse)
+library(plm)
+library(nlme)
+library(lmtest)
+library(sandwich)
+library(systemfit)
+library(stargazer)
+library(foreign)
+library(dplyr)
+
+setwd("~/Desktop/Bibliografia 5o Semestre")
+
+#Tutorial I - IV & VIII ####
+
+dados1 <- read_dta('base1.dta')
+base1<-dados1[order(dados1$ID),]
+dados_painel <- pdata.frame(dados1, index = c('ID', 'TIME'))
+dados_painel <- make.pbalanced(dados_painel, balance.type = c('shared.individuals'))
+pdim(dados_painel)
+
+
+#Pooled regression:
+OLSpooled<-plm(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN,
+               data=dados_painel, model='pooling',index = c("ID","TIME"))
+summary(OLSpooled)
+
+coeftest(OLSpooled, vcov = vcovHC(OLSpooled, type="HC3"))
+
+acf(OLSpooled$residuals)
+Box.test(OLSpooled$residuals)
+
+GLSpooled <- pggls(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN,data=dados_painel, model='pooling')
+summary(GLSpooled)
+
+#Igual à regressão "comum":
+OLSpooled2<-lm(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN,data=dados_painel)
+summary(OLSpooled2)
+
+#Efeito fixo:    
+#jeito1 - dummy
+FE_dummy <- lm(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN + factor(ID) - 1, data = dados_painel)
+summary(FE_dummy)
+
+#jeito2 - demeaned 
+#não consegui fazer
+
+#jeito3 - plm
+M_fixo<-plm(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN,data=dados_painel,
+            index=c("ID", "TIME"), model = "within")   
+summary(M_fixo)
+coeftest(OLSfixo, vcov = vcovHC(OLSpooled, type="HC1"))
+fixef(OLSfixo)
+
+stargazer(OLSpooled, OLSfixo, type = 'text')
+
+# Testando efeito fixo, nula: OLS melhor que efeito fixo
+pFtest(OLSfixo, OLSpooled)
+
+
+#Random Effecs 
+M_Random<-plm(log(EARNINGS) ~ UNION+MALE+MARRIED+SIBLINGS+URBAN,data=dados_painel,
+              index=c("ID", "TIME"), model = "random")   
+summary(M_Random)
+coeftest(M_Random, vcov = vcovHC(M_Random, type="HC1"))
+
+#Comparando Random Effects e Fixed Effects
+stargazer(OLSpooled,M_fixo, M_FD, M_Random, type = 'text')
+
+#Haussman test: Se podemos rejeitar a H0, ai usamos o efeito fixo, se não o aleatório
+phtest(M_fixo, M_Random)
+
+#Tutorial V ####
+
+bSTAR <- read_dta('Problema 5.dta')
+bSTAR_k<-bSTAR[bSTAR$stark==1,]
+smallK<-bSTAR_k$cltypek==1
+regk<-bSTAR_k$cltypek==2
+manD<-bSTAR_k$ssex==1
+raceD<-bSTAR_k$srace==1
+bSTAR_k$smallCd<-as.numeric(smallK)
+bSTAR_k$regCd<-as.numeric(regk)
+bSTAR_k$manD<-as.numeric(manD)
+bSTAR_k$raceD<-as.numeric(raceD)
+
+Bcluster<-lm(log(tmathss1)~smallCd+regCd+manD+totexpk+raceD+factor(cladk)+factor(sesk)+factor(schidkn), data = bSTAR_k)
+
+summary(Bcluster)
+
+acf(Bcluster$residuals)
+
+#Ajustamneto do erro-padrão (Matriz Robusta)
+
+G <- length(unique(bSTAR_k$schidkn))
+N <- length(bSTAR_k$schidkn)
+dfa <- (G/(G - 1)) * (N - 1)/Bcluster$df.residual
+
+schidkn_c_vcov <- dfa * vcovHC(Bcluster, type = "HC0", cluster = "group", adjust = T)
+coeftest(Bcluster, vcov = schidkn_c_vcov )
+
+
+#Tutorial VI ####
+
+pol_crime <- read_dta('Problem6.dta')
+pol_crime <- pdata.frame(pol_crime, index = c('state', 'year'))
+pol_crime <- make.pbalanced(pol_crime, balance.type = c('shared.individuals'))
+
+#estimador within 
+reg_propw <- plm(lcrip ~ polpc + unem + black + metro + incpc + govelec + lpris + ag0_14 + 
+                   ag15_17 + ag18_24 + ag25_34 , data = pol_crime, model = "within")
+summary(reg_propw)
+
+acf(reg_propw$residuals)
+ac1fe_prop<-lm(reg_propw$residuals[2:length(reg_propw$residuals)] ~ reg_propw$residuals[1:(length(reg_propw$residuals)-1)])
+summary(ac1fe_prop)
+
+reg_viow <- plm(lcriv ~ polpc + unem + black + metro + incpc + govelec + lpris + ag0_14 + 
+                  ag15_17 + ag18_24 + ag25_34 , data = pol_crime, model = "within")
+summary(reg_viow)
+
+acf(reg_viow$residuals)
+ac1fe_vio<-lm(reg_viow$residuals[2:length(reg_viow$residuals)] ~ reg_viow$residuals[1:(length(reg_viow$residuals)-1)])
+summary(ac1fe_vio)
+
+#estimador FD 
+
+reg_propFD <- plm(lcrip ~ polpc + unem + black + metro + incpc + govelec + lpris + ag0_14 + 
+                    ag15_17 + ag18_24 + ag25_34 , data = pol_crime, model = "fd")
+summary(reg_propFD)
+coeftest(reg_propFD, vcov = vcovHC, method = "white1")
+acf(reg_propFD$residuals)
+
+
+reg_vioFD <-  plm(lcriv ~ polpc + unem + black + metro + incpc + govelec + lpris + ag0_14 + 
+                    ag15_17 + ag18_24 + ag25_34 , data = pol_crime, model = "fd")
+summary(reg_vioFD)
+coeftest(reg_vioFD, vcov = vcovHC, method = "white1")
+
+stargazer(reg_viow, reg_vioFD, type = 'text')
+stargazer(reg_propw, reg_propFD, type = 'text')
+
+
+#Tutorial VII ####
+setwd("~/Desktop/Bibliografia 5o Semestre/njmin")
+public <- read_delim("~/Desktop/Bibliografia 5o Semestre/njmin/public.dat", 
+                     " ", escape_double = FALSE, col_names = FALSE, 
+                     trim_ws = TRUE)
+
+codebook <- read_lines(file = paste0("codebook"))
+
+variable_names <- codebook %>%
+  `[`(8:59) %>%  #I select lines 8 to 59 using the `[`() function
+  `[`(-c(5, 6, 13, 14, 32, 33)) %>% # I remove lines that I do not need, and then using stringr::str_sub(1, 13) I only keep the first 13 characters (which are the variable names, plus some white space characters) and then, to remove all the unneeded white space characters I use stringr::squish(), and then change the column names to lowercase.
+  str_sub(1, 13) %>%
+  str_squish() %>%
+  str_to_lower()
+
+#Agora ler a base de dados
+
+public <- public %>%
+  select(-X47) %>%
+  `colnames<-`(., variable_names) %>%
+  mutate_all(as.numeric) %>%
+  mutate(sheet = as.character(sheet))
+
+
+#In their study, Card & Krueger (1994) measure employment in full time equivalents which they define as the number of full time employees (empft and empft2) 
+#plus the number of managers (nmgrs and nmgrs2) plus 0.5 times the number part-time employees (emppt / emppt2). 
+
+public <- public %>% 
+  mutate(FTE = nmgrs + empft + (0.5 * emppt),
+         FTE2 = nmgrs2 + empft2 + (0.5 * emppt2))
+
+#gerando subsets pra cada tipo de estado
+public_NJ <- subset(public, state == 1)
+public_NJ <- public_NJ %>% na.omit()
+public_PA <- subset(public, state == 0)
+public_PA <- public_PA %>% na.omit()
+
+#fazendo estats 
+public %>% 
+  group_by(state) %>% 
+  summarise(mean(FTE, na.rm = T),
+            mean(FTE2, na.rm = T))
+
+#fazendo a diferença de medias:
+t.test(public_NJ$FTE, public_NJ$FTE2)
+
+reg_dat <- data.frame(
+  rbind(
+    data.frame(id = public$sheet, 
+               chain = public$chain,
+               state = public$state,
+               empl = public$FTE,
+               D = 0),
+    data.frame(id = public$sheet,
+               chain = public$chain,
+               state = public$state,
+               empl = public$FTE2,
+               D = 1)))
+
+emp_did_mod <- lm(empl ~ D*state + D + state, data = reg_dat)
+stargazer(emp_did_mod, type = 'text')
+coeftest(emp_did_mod, vcov. = vcovHC, type = "HC1")
+
+d <- pdata.frame(reg_dat, index = c("id", "state"))
+
+did.reg <- plm(empl ~ D + D*state + state, data = d,model = "pooling")
+
+treatment_pre<-mean(public_NJ$FTE)
+treatment_post<-mean(public_NJ$FTE2)
+control_pre<-mean(public_PA$FTE)
+control_post<-mean(public_PA$FTE2)
+
+plot(x=c(0,1), y=c(control_pre, control_post), type = "b", col="red", xlab = 't', ylab = 'employment', ylim = c(10,30)) #controle: vermelho 
+par(new=TRUE)
+plot(x=c(0,1), y = c(treatment_pre, treatment_post), type = 'b', xlab = '', ylab = '',  ylim = c(10,30))
+
+
+cluster <- coeftest(emp_did_mod, vcov=vcovHC(emp_did_mod,type="HC0",cluster="group"))
+
+
+
+
+#Exc 3 Lista #### 
+wages <- data("Wages", package = 'plm')
+wage_painel <- pdata.frame(Wages, index=595)
+#b
+pooled <- plm(lwage ~ bluecol + exp + ed + black + sex, 
+              data = wage_painel, model = 'pooling', index = c('id', 'time'))
+coeftest(pooled, vcov = vcovHC(pooled, type="HC3"))
+#c
+fixed <- plm(lwage ~ bluecol + exp + ed + black + sex - 1, 
+             data = wage_painel, model = 'within', index = c('id', 'time'))
+coeftest(fixed, vcov = vcovHC(fixed, type="HC3"))
+#d
+FE_time <- plm(lwage ~ bluecol + exp +ed + black + sex -1, 
+               data=wage_panel, effect="time", model ="within")
+FE_tr <- coeftest(FE_time, vcov=vcovHC(FE_time, type="HC3"))
+
+#e 
+random <- plm(lwage ~ bluecol + exp + ed + black + sex, 
+              data = wage_painel, model = 'random', index = c('id', 'time'))
+coeftest(random, vcov = vcovHC(random, type="HC3"))
